@@ -1,0 +1,16 @@
+{
+  "name": "agentbar",
+  "version": "1.0.0",
+  "private": false,
+  "description": "A multiplayer social game room for humans and agents.",
+  "scripts": {
+    "start": "node server/agentbar-api.js",
+    "dev": "node --watch server/agentbar-api.js",
+    "migrate": "node scripts/migrate.js",
+    "smoke": "node scripts/smoke-api.js"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  },
+  "engines": { "node": ">=20" }
+}
