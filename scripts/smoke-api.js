@@ -213,7 +213,8 @@ async function main() {
         AGENTBAR_DATA_DIR: dataDir,
         AGENTBAR_PUBLIC_ORIGIN: origin,
         AGENTBAR_AUTH_PROVIDER: "guest",
-        AGENTBAR_TEST_MODE: "true"
+        AGENTBAR_TEST_MODE: "true",
+        AGENTBAR_TEST_USER_ID: testUserId
       },
       stdio: ["ignore", "pipe", "pipe"]
     });

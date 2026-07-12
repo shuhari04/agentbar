@@ -7,3 +7,4 @@ Original prompt: Open-source the entire AgentBar as an independent GitHub reposi
 - Created a 25-second animated WebP preview from the supplied demo recording; the full source video is reserved for the first GitHub Release asset.
 - Verified syntax, static serving, guest-cookie issuance, brand/secret scan, and browser UI smoke screenshots for lobby, host controls, card play, dice, and mobile layout.
 - Database-backed smoke remains to be run by any deployment with Docker or PostgreSQL; Docker is unavailable on this workstation.
+- Published `v1.0.0` and verified the uploaded full demo asset hash against the local source recording.
