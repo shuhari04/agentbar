@@ -37,7 +37,7 @@ async function api(method, pathname, body, token, account = false) {
     headers: {
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(account ? { "X-AgentBar-Test-User": testUserId } : {})
+      ...(account ? { "X-AgentBar-Test-User": typeof account === "string" ? account : testUserId } : {})
     },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
@@ -52,13 +52,13 @@ async function createRoom(gameType, name) {
   return api("POST", "/api/bar/rooms", { roomName: name, visibility: "private", gameType }, "", true);
 }
 
-async function join(room, index) {
+async function join(room, index, account = true) {
   return api("POST", "/api/bar/rooms/join", {
     roomId: room.room.id,
     roomCode: room.roomCode,
     agentName: `Smoke Agent ${index}`,
     testCreateAdditionalSeat: index > 1
-  }, "", true);
+  }, "", account);
 }
 
 async function leave(roomId, player) {
@@ -67,6 +67,23 @@ async function leave(roomId, player) {
 
 async function startGame(room, body) {
   return api("POST", `/api/bar/rooms/${room.room.id}/host/game/start`, body, "", true);
+}
+
+async function endGame(room) {
+  return api("POST", `/api/bar/rooms/${room.room.id}/host/game/end`, {}, "", true);
+}
+
+async function rematchReady(roomId, player, ready) {
+  return api("POST", `/api/bar/rooms/${roomId}/player/rematch-ready`, { ready }, player.agentToken);
+}
+
+async function expectApiFailure(method, pathname, body, token, expectedStatus) {
+  const response = await fetch(`${origin}${pathname}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body || {})
+  });
+  assert(response.status === expectedStatus, `${method} ${pathname} expected ${expectedStatus}, received ${response.status}`);
 }
 
 async function privateView(roomId, player) {
@@ -195,6 +212,35 @@ async function smokeUndercover() {
   }
 }
 
+async function smokeSettlementAndRematch() {
+  const room = await createRoom("liar_dice", `Smoke Rematch ${Date.now()}`);
+  try {
+    const hostPlayer = await join(room, 1, testUserId);
+    const guestPlayer = await join(room, 2, `${testUserId}:guest`);
+    const spectator = await join(room, 3, `${testUserId}:spectator`);
+    const started = await startGame(room, { type: "liar_deck", maxPlayers: 2, decisionTimeoutSeconds: 38 });
+    const playerSeats = started.state.players.map((player) => `${player.id}:${player.seatIndex}`).sort();
+    const ended = await endGame(room);
+    assert(ended.state.game.phase === "ended" && ended.state.game.result?.aborted === true, "host end did not create aborted settlement");
+    assert(ended.state.game.rematch?.eligibleCount === 1, "eligible count should exclude host and spectator");
+    const ready = await rematchReady(room.room.id, guestPlayer, true);
+    assert(ready.state.game.rematch.readyCount === 1, "ready state was not recorded");
+    const cancelled = await rematchReady(room.room.id, guestPlayer, false);
+    assert(cancelled.state.game.rematch.readyCount === 0, "ready state was not cancelled");
+    await expectApiFailure("POST", `/api/bar/rooms/${room.room.id}/player/rematch-ready`, { ready: true }, hostPlayer.agentToken, 403);
+    await expectApiFailure("POST", `/api/bar/rooms/${room.room.id}/player/rematch-ready`, { ready: true }, spectator.agentToken, 403);
+    await rematchReady(room.room.id, guestPlayer, true);
+    const restarted = await startGame(room, { type: "liar_deck", maxPlayers: 2, decisionTimeoutSeconds: 38 });
+    assert(restarted.state.game.phase === "playing" && restarted.state.game.rematch.readyCount === 0, "rematch did not reset readiness");
+    assert(JSON.stringify(restarted.state.players.map((player) => `${player.id}:${player.seatIndex}`).sort()) === JSON.stringify(playerSeats), "rematch changed room membership or seats");
+    const retainedTokenView = await privateView(room.room.id, guestPlayer);
+    assert(retainedTokenView.player.id === guestPlayer.player.id, "rematch invalidated the existing Agent token");
+    return "settlement_rematch";
+  } finally {
+    await closeRoom(room.room.id);
+  }
+}
+
 async function main() {
   if (!testUserId) throw new Error("AGENTBAR_TEST_USER_ID or BAR_SMOKE_USER_ID is required");
   let server = null;
@@ -222,7 +268,7 @@ async function main() {
   }
   try {
     await waitForServer(server);
-    const passed = [await smokeLiarDeck(), await smokeLiarDice(), await smokeUndercover()];
+    const passed = [await smokeLiarDeck(), await smokeLiarDice(), await smokeUndercover(), await smokeSettlementAndRematch()];
     console.log(`Agent Bar API smoke passed on ${origin}: ${passed.join(", ")}`);
   } finally {
     if (server) server.kill("SIGTERM");
