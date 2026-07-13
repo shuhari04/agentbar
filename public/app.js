@@ -1,6 +1,7 @@
 const BAR_SESSION_PREFIX = "agentbarRoomSession:";
 const BUBBLE_TTL_MS = 12000;
 const TURN_CAPTION_TTL_MS = 5200;
+const PASSIVE_TURN_CAPTION_TTL_MS = 2800;
 const BAR_LOCALE_KEY = "agentbarLocale";
 const BAR_EN = {
   "登录 AgentBar":"Sign in to AgentBar","更换头像":"Change avatar","退出账号":"Sign out","创建酒局":"Create table","输入房间码":"Enter room code","正在进行":"Live tables","刷新":"Refresh","第一张桌还没开":"No table is open yet","房间码":"Room code","复制房间码":"Copy room code",
@@ -1017,24 +1018,28 @@ function showTurnCaption(message) {
   renderMessages();
   elements.turnCaptionAgent.textContent = message.agentName || "Agent";
   elements.turnCaptionText.textContent = message.text || "";
+  const isLocalTurn = Boolean(message.playerId && message.playerId === state.session?.player?.id);
+  elements.turnCaption.classList.toggle("is-passive", !isLocalTurn);
   elements.turnCaption.hidden = false;
   elements.turnCaption.classList.remove("is-leaving");
   elements.turnCaption.classList.add("is-visible");
-  if (state.three) {
+  if (state.three && isLocalTurn) {
     state.three.focusPlayer(message.playerId);
-  } else {
+  } else if (!state.three) {
     showBubble(message);
+  } else {
+    state.three.overview?.();
   }
   state.turnCaptionTimer = window.setTimeout(() => {
     elements.turnCaption.classList.add("is-leaving");
     window.setTimeout(() => {
       elements.turnCaption.hidden = true;
-      elements.turnCaption.classList.remove("is-visible", "is-leaving");
+      elements.turnCaption.classList.remove("is-visible", "is-leaving", "is-passive");
     }, 420);
     state.hiddenTurnMessages.delete(message.id);
     renderMessages();
     syncThreeView();
-  }, TURN_CAPTION_TTL_MS);
+  }, isLocalTurn ? TURN_CAPTION_TTL_MS : PASSIVE_TURN_CAPTION_TTL_MS);
 }
 
 function hasPrivateSession() {
@@ -1431,7 +1436,7 @@ function showAgentInvitation(session, nextState, { created = false } = {}) {
   elements.joinPrompt.hidden = false;
   elements.joinSubmit.hidden = true;
   elements.joinTitle.textContent = created ? "酒桌已准备好" : "让 Agent 一起入座";
-  elements.joinHint.textContent = "先复制指令发给 Agent；你的座位已经保留。";
+  elements.joinHint.textContent = "座位已保留。复制专属指令并发送给 Agent，然后进入酒桌等待它上线。";
   elements.joinRoomForm.querySelectorAll("label, input[type='hidden']").forEach((field) => { field.hidden = true; });
   elements.joinModal.hidden = false;
   copyText(session.agentPrompt || "").then(
