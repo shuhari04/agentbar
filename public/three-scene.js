@@ -247,8 +247,8 @@ class BarThreeScene {
       transparent: true,
       depthWrite: false
     }));
-    label.position.set(0, 0.72, 0);
-    label.scale.set(1.34, 0.66, 1);
+    label.position.set(0, 0.88, 0);
+    label.scale.set(1.76, 0.96, 1);
     group.add(label);
 
     this.seatGroup.add(group);
@@ -744,28 +744,28 @@ async function loadAvatarTexture(url, label, online, options = {}) {
     image.src = url;
   });
   const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 280;
+  canvas.width = 640;
+  canvas.height = 344;
   const context = canvas.getContext("2d");
   const side = Math.min(image.naturalWidth, image.naturalHeight);
   const sx = (image.naturalWidth - side) / 2;
   const sy = (image.naturalHeight - side) / 2;
   context.save();
   context.beginPath();
-  context.arc(256, 88, 68, 0, Math.PI * 2);
+  context.arc(320, 106, 84, 0, Math.PI * 2);
   context.clip();
-  context.drawImage(image, sx, sy, side, side, 188, 20, 136, 136);
+  context.drawImage(image, sx, sy, side, side, 236, 22, 168, 168);
   context.restore();
   context.strokeStyle = online ? "#eb583e" : "rgba(255,255,255,.42)";
-  context.lineWidth = 5;
+  context.lineWidth = 6;
   context.beginPath();
-  context.arc(256, 88, 70, 0, Math.PI * 2);
+  context.arc(320, 106, 87, 0, Math.PI * 2);
   context.stroke();
   context.fillStyle = online ? "rgba(255,255,255,.92)" : "rgba(255,255,255,.62)";
-  context.font = "30px monospace";
+  context.font = "36px monospace";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(truncateText(label, 12), 256, 190);
+  context.fillText(truncateText(label, 12), 320, 232);
   drawSeatAnnotations(context, canvas, options);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -829,7 +829,7 @@ function drawSeatAnnotations(context, canvas, options = {}) {
     context.shadowBlur = 10;
     context.fillStyle = "rgba(255,235,225,.94)";
     context.font = "700 24px monospace";
-    context.fillText(truncateText(options.claim, 14), canvas.width / 2, 240);
+    context.fillText(truncateText(options.claim, 14), canvas.width / 2, canvas.height > 300 ? 292 : 240);
   }
   if (options.eliminated) {
     context.shadowBlur = 16;

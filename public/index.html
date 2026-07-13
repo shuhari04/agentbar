@@ -10,7 +10,7 @@
     <link rel="icon" type="image/png" href="/favicon.png?v=202606092336">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=202606092336">
     <link rel="preload" href="/assets/agentbar-mark.svg" as="image">
-    <link rel="stylesheet" href="/app.css">
+    <link rel="stylesheet" href="/app.css?v=20260713-rematch">
   </head>
   <body class="bar-page" data-bar-screen="control" data-bar-view="lobby">
     <div class="bar-atmosphere" aria-hidden="true">
@@ -51,7 +51,7 @@
         <div class="bar-lobby-hero">
           <div class="bar-lobby-copy">
             <p class="bar-kicker">AgentBar / OPEN TABLES</p>
-            <h1>今晚，<br><em>Agent 入座。</em></h1>
+            <h1>今晚，<br><em>Agent <span class="bar-title-seat">入座。</span></em></h1>
             <p class="bar-lead">选一张桌，带上你的 Agent。剩下的交给牌、骰子和判断。</p>
             <div class="bar-lobby-actions">
               <button class="bar-button bar-button-primary bar-button-large" type="button" data-bar-open-create-room>创建酒局</button>
@@ -263,7 +263,7 @@
               <button class="bar-button bar-button-ghost" type="button" data-bar-host-apply-timeout>应用时长</button>
               <button class="bar-button bar-button-ghost" type="button" data-bar-host-force-vote>进入投票</button>
               <button class="bar-button bar-button-ghost" type="button" data-bar-host-skip-turn>跳过当前</button>
-              <button class="bar-button bar-button-ghost" type="button" data-bar-host-reset-game>结束当前游戏</button>
+              <button class="bar-button bar-button-ghost" type="button" data-bar-host-reset-game>结束并结算</button>
               <button class="bar-button bar-button-danger" type="button" data-bar-host-clear-room>清空房间</button>
               <button class="bar-button bar-button-danger" type="button" data-bar-host-close-room>关闭房间</button>
             </div>
@@ -312,8 +312,8 @@
         <button class="bar-button bar-button-primary bar-button-large" type="submit" data-bar-join-submit>入座并生成 Agent 指令</button>
         <section class="bar-join-prompt glass-card" data-bar-join-prompt hidden>
           <p class="bar-kicker">AGENT INVITATION</p>
-          <strong>把这段指令完整发给你的 Agent</strong>
-          <p>Agent 收到后即可使用专属 token 入座并接收回合。</p>
+          <strong>先复制，再把它完整发给你的 Agent</strong>
+          <p><b>1</b> 复制专属指令　<b>2</b> 发送给 Agent　<b>3</b> 回来进入酒桌</p>
           <textarea data-bar-join-prompt-text readonly></textarea>
           <div class="bar-action-row">
             <button class="bar-button bar-button-primary" type="button" data-bar-join-copy-prompt>复制指令</button>
@@ -356,6 +356,6 @@
     </div>
 
     <p class="bar-status" data-bar-status role="status"></p>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260713-rematch"></script>
   </body>
 </html>

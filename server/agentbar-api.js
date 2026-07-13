@@ -41,7 +41,7 @@ function sign(value) { return crypto.createHmac("sha256",SESSION_SECRET).update(
 function encodeSession(user) { const body=Buffer.from(JSON.stringify({...user,exp:Date.now()+2592000000})).toString("base64url");return body+"."+sign(body); }
 function decodeSession(value) { const parts=String(value||"").split(".");if(parts.length!==2)return null;const body=parts[0],signature=parts[1];if(!crypto.timingSafeEqual(Buffer.from(sign(body)),Buffer.from(signature)))return null;try{const user=JSON.parse(Buffer.from(body,"base64url").toString("utf8"));return user.exp>Date.now()?user:null;}catch{return null;} }
 function sessionCookie(user,maxAge=2592000) { return "agentbar_session="+encodeURIComponent(encodeSession(user))+"; Path=/; HttpOnly; SameSite=Lax; Max-Age="+maxAge; }
-async function requireAgentBarAccount(req,{checkOrigin=false}={}) { if(req.agentbarUser)return req.agentbarUser;if(checkOrigin)requireSameSiteOrigin(req);const test=cleanText(req.headers["x-agentbar-test-user"]||"",160);if(BAR_TEST_MODE&&test&&test===BAR_TEST_USER_ID)return req.agentbarUser={id:test,name:"Smoke Player",email:"smoke@example.invalid",image:""};const user=decodeSession(parseCookies(req).agentbar_session);if(!user?.id){const e=new Error("login_required");e.statusCode=401;throw e;}return req.agentbarUser=user; }
+async function requireAgentBarAccount(req,{checkOrigin=false}={}) { if(req.agentbarUser)return req.agentbarUser;if(checkOrigin)requireSameSiteOrigin(req);const test=cleanText(req.headers["x-agentbar-test-user"]||"",160);if(BAR_TEST_MODE&&test&&(test===BAR_TEST_USER_ID||test.startsWith(`${BAR_TEST_USER_ID}:`)))return req.agentbarUser={id:test,name:"Smoke Player",email:"smoke@example.invalid",image:""};const user=decodeSession(parseCookies(req).agentbar_session);if(!user?.id){const e=new Error("login_required");e.statusCode=401;throw e;}return req.agentbarUser=user; }
 async function verifyHumanIfNeeded(){return true;}
 function parseMultipart(buffer,contentType){const boundary=/boundary=([^;]+)/i.exec(contentType)?.[1]?.replace(/^"|"$/g,"");if(!boundary)return[];return buffer.toString("binary").split("--"+boundary).slice(1,-1).map((chunk)=>{const parts=chunk.replace(/^\r?\n/,"").split(/\r?\n\r?\n/);const head=parts[0],body=parts[1]||"";return{name:/name="([^"]+)"/.exec(head)?.[1]||"",fileName:/filename="([^"]*)"/.exec(head)?.[1]||"",body:Buffer.from(body.replace(/\r?\n$/, ""),"binary")};});}
 function createInitialBarState(now = new Date().toISOString()) {
@@ -159,11 +159,25 @@ function publicBarPlayer(player) {
   };
 }
 
-function publicBarGame(game, players = []) {
+function publicBarRematch(game, players = [], roomOwnerUserId = "") {
+  const participantIds = new Set(Array.isArray(game?.playerOrder) ? game.playerOrder : []);
+  const eligiblePlayerIds = players.filter((player) => {
+    const lastSeenAtMs = Date.parse(player.lastSeenAt || "");
+    const online = Boolean(lastSeenAtMs && Date.now() - lastSeenAtMs <= BAR_OFFLINE_AFTER_MS);
+    return participantIds.has(player.id) && !player.isBot && player.ownerUserId !== roomOwnerUserId && online;
+  }).map((player) => player.id);
+  const eligible = new Set(eligiblePlayerIds);
+  const readyPlayerIds = [...new Set(Array.isArray(game?.rematchReadyPlayerIds) ? game.rematchReadyPlayerIds : [])]
+    .filter((playerId) => eligible.has(playerId));
+  return { readyPlayerIds, readyCount: readyPlayerIds.length, eligibleCount: eligiblePlayerIds.length };
+}
+
+function publicBarGame(game, players = [], roomOwnerUserId = "") {
   if (!game) {
     return null;
   }
   const playerNames = new Map(players.map((player) => [player.id, player.agentName]));
+  const rematch = publicBarRematch(game, players, roomOwnerUserId);
   if (game.type === "liar_dice") {
     const revealed = game.phase === "ended" || game.phase === "revealed" || Boolean(game.revealedAt);
     return {
@@ -177,6 +191,7 @@ function publicBarGame(game, players = []) {
       turnAgentName: game.turnPlayerId ? playerNames.get(game.turnPlayerId) || "" : "",
       playerOrder: Array.isArray(game.playerOrder) ? game.playerOrder : [],
       diceCount: Number(game.diceCount || 5),
+      rematch,
       lastBid: game.lastBid
         ? {
             playerId: game.lastBid.playerId,
@@ -210,6 +225,7 @@ function publicBarGame(game, players = []) {
             actualCount: Number(game.result.actualCount || 0),
             requiredCount: Number(game.result.requiredCount || 0),
             face: Number(game.result.face || 0),
+            aborted: Boolean(game.result.aborted),
             reason: game.result.reason || "",
             endedAt: game.result.endedAt
           }
@@ -245,6 +261,7 @@ function publicBarGame(game, players = []) {
       turnPlayerId: game.turnPlayerId || "",
       turnAgentName: game.turnPlayerId ? playerNames.get(game.turnPlayerId) || "" : "",
       playerOrder: Array.isArray(game.playerOrder) ? game.playerOrder : [],
+      rematch,
       players: (Array.isArray(game.playerOrder) ? game.playerOrder : []).map((playerId) => ({
         id: playerId,
         agentName: playerNames.get(playerId) || "",
@@ -267,6 +284,7 @@ function publicBarGame(game, players = []) {
         ? {
             winnerPlayerId: game.result.winnerPlayerId || "",
             winnerAgentName: playerNames.get(game.result.winnerPlayerId) || "",
+            aborted: Boolean(game.result.aborted),
             reason: game.result.reason || "",
             endedAt: game.result.endedAt
           }
@@ -283,6 +301,7 @@ function publicBarGame(game, players = []) {
     turnPlayerId: game.turnPlayerId || "",
     turnAgentName: game.turnPlayerId ? playerNames.get(game.turnPlayerId) || "" : "",
     playerOrder: Array.isArray(game.playerOrder) ? game.playerOrder : [],
+    rematch,
     descriptions: Array.isArray(game.descriptions)
       ? game.descriptions.map((item) => ({
           playerId: item.playerId,
@@ -308,6 +327,7 @@ function publicBarGame(game, players = []) {
           eliminatedAgentName: playerNames.get(game.result.eliminatedPlayerId) || "",
           undercoverPlayerId: game.result.undercoverPlayerId,
           undercoverAgentName: playerNames.get(game.result.undercoverPlayerId) || "",
+          aborted: Boolean(game.result.aborted),
           reason: game.result.reason,
           endedAt: game.result.endedAt
         }
@@ -315,7 +335,7 @@ function publicBarGame(game, players = []) {
   };
 }
 
-function publicBarState(state) {
+function publicBarState(state, roomOwnerUserId = "") {
   return {
     schema: state.schema,
     createdAt: state.createdAt,
@@ -333,7 +353,7 @@ function publicBarState(state) {
       text: message.text,
       createdAt: message.createdAt
     })),
-    game: publicBarGame(state.game, state.players)
+    game: publicBarGame(state.game, state.players, roomOwnerUserId)
   };
 }
 
@@ -1702,7 +1722,7 @@ function publicBarRoomState(room) {
       players: room.players,
       messages: room.messages,
       game: room.game
-    }),
+    }, room.ownerUserId),
     room: {
       id: room.id,
       ownerUserId: room.ownerUserId,
@@ -2333,7 +2353,7 @@ async function getBarRoomPlayerPrivate(roomId, request) {
   const player = requireBarRoomPlayer(request, room);
   return {
     player: publicBarPlayer(player),
-    game: publicBarGame(room.game, room.players),
+    game: publicBarGame(room.game, room.players, room.ownerUserId),
     private: privateGameForPlayer(room.game, player.id),
     decision: privateBarDecision(room.game?.decision, player.id),
     allowedActions: liarDeckAllowedActions(room.game, player.id),
@@ -2368,14 +2388,14 @@ async function getBarRoomAgentInbox(roomId, raw, request) {
             id: playerId,
             agentName: playerNameById(room.players, playerId)
           })),
-          lastBid: publicBarGame(room.game, room.players)?.lastBid || null,
-          bids: publicBarGame(room.game, room.players)?.bids || [],
-          diceRevealed: publicBarGame(room.game, room.players)?.diceRevealed || false,
-          dice: publicBarGame(room.game, room.players)?.dice || [],
-          stats: publicBarGame(room.game, room.players)?.stats || null,
-          descriptions: publicBarGame(room.game, room.players)?.descriptions || [],
-          votes: publicBarGame(room.game, room.players)?.votes || [],
-          result: publicBarGame(room.game, room.players)?.result || null
+          lastBid: publicBarGame(room.game, room.players, room.ownerUserId)?.lastBid || null,
+          bids: publicBarGame(room.game, room.players, room.ownerUserId)?.bids || [],
+          diceRevealed: publicBarGame(room.game, room.players, room.ownerUserId)?.diceRevealed || false,
+          dice: publicBarGame(room.game, room.players, room.ownerUserId)?.dice || [],
+          stats: publicBarGame(room.game, room.players, room.ownerUserId)?.stats || null,
+          descriptions: publicBarGame(room.game, room.players, room.ownerUserId)?.descriptions || [],
+          votes: publicBarGame(room.game, room.players, room.ownerUserId)?.votes || [],
+          result: publicBarGame(room.game, room.players, room.ownerUserId)?.result || null
         }
       : null,
     private: privateGameForPlayer(room.game, player.id),
@@ -2402,6 +2422,44 @@ async function setBarRoomAssistMode(roomId, raw, request) {
     broadcastBarRoomEvent(roomId, "decision_started", { decision: publicState.game.decision, state: publicState });
   }
   return { player: publicBarPlayer({ ...player, assistMode: mode }), state: publicState };
+}
+
+async function setBarRoomRematchReady(roomId, raw, request) {
+  const { room } = await readRequiredBarRoom(roomId);
+  const player = requireBarRoomPlayer(request, room);
+  const game = room.game;
+  if (!game || game.phase !== "ended") {
+    const error = new Error("Rematch readiness is only available after the game ends");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (player.isBot || player.ownerUserId === room.ownerUserId || !(game.playerOrder || []).includes(player.id)) {
+    const error = new Error("This player is not eligible to ready for a rematch");
+    error.statusCode = 403;
+    throw error;
+  }
+  const ready = raw.ready === true;
+  const now = new Date().toISOString();
+  const { room: savedRoom } = await writeBarRoom(roomId, (currentRoom) => {
+    if (!currentRoom.game || currentRoom.game.id !== game.id || currentRoom.game.phase !== "ended") {
+      const error = new Error("The ended game has changed");
+      error.statusCode = 409;
+      throw error;
+    }
+    const readyPlayerIds = new Set(Array.isArray(currentRoom.game.rematchReadyPlayerIds) ? currentRoom.game.rematchReadyPlayerIds : []);
+    if (ready) readyPlayerIds.add(player.id);
+    else readyPlayerIds.delete(player.id);
+    return {
+      ...currentRoom,
+      game: { ...currentRoom.game, rematchReadyPlayerIds: [...readyPlayerIds] },
+      players: currentRoom.players.map((item) => item.id === player.id ? { ...item, lastSeenAt: now } : item)
+    };
+  });
+  const publicState = publicBarRoomState(savedRoom);
+  const event = await appendBarRoomEvent(roomId, "rematch_ready_updated", { playerId: player.id, ready, rematch: publicState.game?.rematch || null });
+  broadcastBarRoomEvent(roomId, "rematch_ready_updated", { event, playerId: player.id, ready, state: publicState });
+  broadcastBarRoomEvent(roomId, "state", publicState);
+  return { ready, rematch: publicState.game?.rematch || null, state: publicState };
 }
 
 async function submitBarRoomAgentSuggestion(roomId, raw, request) {
@@ -2734,6 +2792,10 @@ async function submitBarRoomAgentAction(roomId, raw, request) {
   if (resultMessage) {
     broadcastBarRoomEvent(roomId, "say", { message: resultMessage, state: publicState });
   }
+  if (nextGame.phase === "ended") {
+    const gameEndedEvent = await appendBarRoomEvent(roomId, "game_ended", { gameId: nextGame.id, aborted: false });
+    broadcastBarRoomEvent(roomId, "game_ended", { event: gameEndedEvent, game: publicState.game, state: publicState });
+  }
   if (publicState.game?.decision) {
     broadcastBarRoomEvent(roomId, "decision_started", { decision: publicState.game.decision, state: publicState });
   }
@@ -2938,6 +3000,10 @@ async function submitLiarDeckRoomAgentAction(roomId, raw, room, player) {
   if (systemMessage) {
     broadcastBarRoomEvent(roomId, "say", { message: systemMessage, state: publicState });
   }
+  if (nextGame.phase === "ended") {
+    const gameEndedEvent = await appendBarRoomEvent(roomId, "game_ended", { gameId: nextGame.id, aborted: false });
+    broadcastBarRoomEvent(roomId, "game_ended", { event: gameEndedEvent, game: publicState.game, state: publicState });
+  }
   if (publicState.game?.decision) {
     broadcastBarRoomEvent(roomId, "decision_started", { decision: publicState.game.decision, state: publicState });
   }
@@ -3083,6 +3149,10 @@ async function submitLiarDiceRoomAgentAction(roomId, raw, room, player) {
   broadcastBarRoomEvent(roomId, "say", { message: publicMessage, state: publicState });
   if (resultMessage) {
     broadcastBarRoomEvent(roomId, "say", { message: resultMessage, state: publicState });
+  }
+  if (nextGame.phase === "ended") {
+    const gameEndedEvent = await appendBarRoomEvent(roomId, "game_ended", { gameId: nextGame.id, aborted: false });
+    broadcastBarRoomEvent(roomId, "game_ended", { event: gameEndedEvent, game: publicState.game, state: publicState });
   }
   if (publicState.game?.decision) {
     broadcastBarRoomEvent(roomId, "decision_started", { decision: publicState.game.decision, state: publicState });
@@ -3317,6 +3387,43 @@ async function resetBarRoom(roomId, raw, request) {
   clearBarRoomBotTimer(roomId);
   clearBarRoomDecisionTimer(roomId);
   return { state: publicState, hostState: hostBarRoomState(savedRoom) };
+}
+
+async function endBarRoomGame(roomId, request) {
+  const { room } = await readRequiredBarRoom(roomId);
+  requireBarRoomHost(request, room);
+  if (!room.game || room.game.phase === "ended") {
+    const error = new Error("There is no active game to settle");
+    error.statusCode = 409;
+    throw error;
+  }
+  const endedAt = new Date().toISOString();
+  const reason = "房主结束本局";
+  const nextGame = {
+    ...room.game,
+    phase: "ended",
+    turnPlayerId: "",
+    decision: null,
+    rematchReadyPlayerIds: [],
+    result: { aborted: true, reason, endedAt }
+  };
+  const systemMessage = {
+    id: crypto.randomUUID(), playerId: "system", ownerName: "System", agentName: "System", seatIndex: -1,
+    kind: "system", text: `系统: ${reason}，保留当前记录并进入结算。`, createdAt: endedAt
+  };
+  const { room: savedRoom } = await writeBarRoom(roomId, (currentRoom) => ({
+    ...currentRoom,
+    game: nextGame,
+    messages: [...currentRoom.messages, systemMessage].slice(-BAR_MAX_MESSAGES)
+  }));
+  clearBarRoomBotTimer(roomId);
+  clearBarRoomDecisionTimer(roomId);
+  const publicState = publicBarRoomState(savedRoom);
+  const event = await appendBarRoomEvent(roomId, "game_ended", { gameId: nextGame.id, aborted: true, reason });
+  broadcastBarRoomEvent(roomId, "game_ended", { event, game: publicState.game, state: publicState });
+  broadcastBarRoomEvent(roomId, "say", { message: systemMessage, state: publicState });
+  broadcastBarRoomEvent(roomId, "state", publicState);
+  return { game: publicState.game, state: publicState, hostState: hostBarRoomState(savedRoom) };
 }
 
 async function setBarRoomDecisionTimeout(roomId, raw, request) {
@@ -3717,12 +3824,14 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,"http:
   const barRoomLeaveMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/leave$/);
   const barRoomPlayerPrivateMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/player\/private$/);
   const barRoomPlayerAssistModeMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/player\/assist-mode$/);
+  const barRoomPlayerRematchReadyMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/player\/rematch-ready$/);
   const barRoomPlayerDecisionCommitMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/player\/decision\/commit$/);
   const barRoomAgentInboxMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/agent\/inbox$/);
   const barRoomAgentSuggestionMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/agent\/suggestion$/);
   const barRoomAgentActionMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/agent\/action$/);
   const barRoomHostStateMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/state$/);
   const barRoomHostGameStartMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/game\/start$/);
+  const barRoomHostGameEndMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/game\/end$/);
   const barRoomHostGamePhaseMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/game\/phase$/);
   const barRoomHostGameSkipMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/game\/skip$/);
   const barRoomHostDecisionTimeoutMatch = routePath.match(/^\/bar\/rooms\/([^/]+)\/host\/game\/decision-timeout$/);
@@ -3874,6 +3983,20 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,"http:
     return;
   }
 
+  if (req.method === "POST" && barRoomPlayerRematchReadyMatch) {
+    try {
+      const body = await readBody(req);
+      const raw = body ? JSON.parse(body) : {};
+      const result = await withBarRoomLock(barRoomPlayerRematchReadyMatch[1], () => (
+        setBarRoomRematchReady(barRoomPlayerRematchReadyMatch[1], raw, req)
+      ));
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      sendErrorJson(res, error);
+    }
+    return;
+  }
+
   if (req.method === "POST" && barRoomPlayerDecisionCommitMatch) {
     try {
       const body = await readBody(req);
@@ -3957,6 +4080,19 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,"http:
       const statusCode = error.statusCode || 500;
       if (statusCode >= 500) console.error(error);
       sendJson(res, statusCode, { ok: false, error: statusCode >= 500 ? "server_error" : error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && barRoomHostGameEndMatch) {
+    try {
+      await requireAgentBarAccount(req, { checkOrigin: true });
+      const result = await withBarRoomLock(barRoomHostGameEndMatch[1], () => (
+        endBarRoomGame(barRoomHostGameEndMatch[1], req)
+      ));
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      sendErrorJson(res, error);
     }
     return;
   }

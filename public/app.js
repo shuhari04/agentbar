@@ -1,10 +1,11 @@
 const BAR_SESSION_PREFIX = "agentbarRoomSession:";
 const BUBBLE_TTL_MS = 12000;
 const TURN_CAPTION_TTL_MS = 5200;
+const PASSIVE_TURN_CAPTION_TTL_MS = 2800;
 const BAR_LOCALE_KEY = "agentbarLocale";
 const BAR_EN = {
   "登录 AgentBar":"Sign in to AgentBar","更换头像":"Change avatar","退出账号":"Sign out","创建酒局":"Create table","输入房间码":"Enter room code","正在进行":"Live tables","刷新":"Refresh","第一张桌还没开":"No table is open yet","房间码":"Room code","复制房间码":"Copy room code",
-  "主持":"Host","测试局":"Test game","沉浸模式":"Immersive","显示 HUD":"Show HUD","动态":"Feed","等待开局":"Waiting to start","轮到你选择":"Your choice","自动选择":"Auto select","半自动":"Assisted","全自动":"Autopilot","出牌":"Play cards","质疑":"Challenge","出牌时说":"Say with your play","酒桌动态":"Table feed","连接 Agent":"Connect Agent","主持控制":"Host controls","关闭":"Close","复制":"Copy","复制指令":"Copy instructions","发送":"Send","游戏":"Game","房间名":"Room name","Agent 名":"Agent name","公开":"Public","私密":"Private","开始游戏":"Start game","下一局游戏":"Next game","结束当前游戏":"End current game"
+  "主持":"Host","测试局":"Test game","沉浸模式":"Immersive","显示 HUD":"Show HUD","动态":"Feed","等待开局":"Waiting to start","轮到你选择":"Your choice","自动选择":"Auto select","半自动":"Assisted","全自动":"Autopilot","出牌":"Play cards","质疑":"Challenge","出牌时说":"Say with your play","酒桌动态":"Table feed","连接 Agent":"Connect Agent","主持控制":"Host controls","关闭":"Close","复制":"Copy","复制指令":"Copy instructions","发送":"Send","游戏":"Game","房间名":"Room name","Agent 名":"Agent name","公开":"Public","私密":"Private","开始游戏":"Start game","下一局游戏":"Next game","结束并结算":"End and settle"
 };
 const BAR_ORIGINAL_TEXT = new WeakMap();
 function getLocale() { try { const value = localStorage.getItem(BAR_LOCALE_KEY); if (value === "en" || value === "zh-Hans") return value; } catch {} return /^zh(?:-|$)/i.test(navigator.language || "") ? "zh-Hans" : "en"; }
@@ -716,32 +717,76 @@ function renderDeckStatus() {
     : `轮盘弹仓 ${remaining}/${chambers} · 已扣 ${Number(roulette.pulls || 0)} 次`;
 }
 
+function settlementPlayerChip(player, ready) {
+  const avatar = player.avatarUrl
+    ? `<img src="${escapeHtml(player.avatarUrl)}" alt="">`
+    : `<span>${escapeHtml(player.avatarLabel || player.agentName?.slice(0, 1) || "A")}</span>`;
+  return `<li class="${ready ? "is-ready" : ""}">${avatar}<b>${escapeHtml(player.agentName || player.ownerName || "Agent")}</b><small>${ready ? "已准备" : "等待中"}</small></li>`;
+}
+
+function renderSettlementFrame(content, game) {
+  const rematch = game.rematch || { readyPlayerIds: [], readyCount: 0, eligibleCount: 0 };
+  const readyIds = new Set(rematch.readyPlayerIds || []);
+  const isHost = Boolean(state.account?.id && state.account.id === state.session?.room?.ownerUserId);
+  const playerId = state.session?.player?.id || "";
+  const currentEligible = !isHost && Number(rematch.eligibleCount || 0) > 0
+    && (game.playerOrder || []).includes(playerId)
+    && !state.session?.player?.isBot;
+  const currentReady = readyIds.has(playerId);
+  const chips = state.players.filter((player) => readyIds.has(player.id))
+    .map((player) => settlementPlayerChip(player, readyIds.has(player.id))).join("");
+  let primaryActions = "";
+  if (isHost) {
+    primaryActions = game.type === "undercover"
+      ? `<button class="bar-button bar-button-primary" type="button" data-bar-rematch-config>设置下一局</button>`
+      : `<button class="bar-button bar-button-primary" type="button" data-bar-rematch>再来一局</button>`;
+    primaryActions += `<button class="bar-button bar-button-ghost" type="button" data-bar-switch-game>换个游戏</button>`;
+  } else if (currentEligible) {
+    primaryActions = `<button class="bar-button ${currentReady ? "bar-button-ready" : "bar-button-primary"}" type="button" data-bar-rematch-ready aria-pressed="${currentReady}">${currentReady ? "已准备 · 点击取消" : "准备下一局"}</button>`;
+  }
+  elements.settlement.hidden = false;
+  elements.settlement.innerHTML = `
+    <div class="bar-settlement-card glass-card" role="dialog" aria-modal="true" aria-labelledby="bar-settlement-title">
+      <div class="bar-settlement-scroll">${content}</div>
+      <footer class="bar-settlement-footer">
+        <div class="bar-rematch-status">
+          <div><strong>下一局</strong><span>${Number(rematch.readyCount || 0)} / ${Number(rematch.eligibleCount || 0)} 位玩家已准备</span></div>
+          <ul>${chips || "<li class=\"is-empty\"><span>·</span><b>等待玩家</b><small>房主可直接开始</small></li>"}</ul>
+        </div>
+        <div class="bar-settlement-actions">
+          ${primaryActions}
+          <button class="bar-button bar-button-ghost" type="button" data-bar-settlement-leave>返回大厅</button>
+        </div>
+      </footer>
+    </div>`;
+}
+
 function renderSettlement() {
   const game = state.game;
-  if (!game || game.phase !== "ended" || !game.result) {
+  if (!game || game.phase !== "ended") {
     elements.settlement.hidden = true;
     elements.settlement.innerHTML = "";
     return;
   }
+  const result = game.result || { aborted: true, reason: "本局已结束。" };
   if (game.type === "liar_dice") {
     const stats = game.stats || {};
     const faceCounts = stats.faceCounts || {};
     const dice = game.dice || [];
-    elements.settlement.hidden = false;
-    elements.settlement.innerHTML = `
+    renderSettlementFrame(`
       <div class="bar-settlement-head">
         <span>DICE REVEAL</span>
-        <h2>吹牛骰子开骰</h2>
-        <p>${escapeHtml(game.result.reason || "")}</p>
+        <h2 id="bar-settlement-title">${result.aborted ? "本局已结算" : "吹牛骰子开骰"}</h2>
+        <p>${escapeHtml(result.reason || "本局已结束。")}</p>
       </div>
       <div class="bar-settlement-grid">
         <section>
           <h3>结果</h3>
           <dl class="bar-result-list">
-            <div><dt>输家</dt><dd>${escapeHtml(game.result.loserAgentName || "无自动判定")}</dd></div>
-            <div><dt>叫点</dt><dd>${game.result.requiredCount ? `${game.result.requiredCount} 个 ${game.result.face}` : "无"}</dd></div>
-            <div><dt>实际</dt><dd>${Number(game.result.actualCount || 0)} 个</dd></div>
-            <div><dt>主人动作</dt><dd>${game.result.loserAgentName ? `${escapeHtml(game.result.loserAgentName)} 的主人该喝一口` : "主持人查看结果"}</dd></div>
+            <div><dt>输家</dt><dd>${escapeHtml(result.loserAgentName || "无自动判定")}</dd></div>
+            <div><dt>最终叫点</dt><dd>${result.requiredCount ? `${result.requiredCount} 个 ${result.face}` : "无"}</dd></div>
+            <div><dt>实际数量</dt><dd>${Number(result.actualCount || 0)} 个</dd></div>
+            <div><dt>结算</dt><dd>${result.aborted ? "房主提前结束，不记录胜负" : result.loserAgentName ? `${escapeHtml(result.loserAgentName)} 本局落败` : "主持人查看结果"}</dd></div>
           </dl>
         </section>
         <section>
@@ -759,18 +804,25 @@ function renderSettlement() {
           </ol>
         </section>
       </div>
-    `;
+    `, game);
     return;
   }
   if (game.type === "liar_deck") {
     const reveal = game.lastReveal || {};
     const players = game.players || [];
-    elements.settlement.hidden = false;
-    elements.settlement.innerHTML = `
+    const eliminationOrder = new Map((game.eliminations || []).map((item, index) => [item.playerId, index]));
+    const rankedPlayers = [...players].sort((a, b) => {
+      if (a.id === result.winnerPlayerId) return -1;
+      if (b.id === result.winnerPlayerId) return 1;
+      if (a.status === "alive" && b.status !== "alive") return -1;
+      if (b.status === "alive" && a.status !== "alive") return 1;
+      return Number(eliminationOrder.get(b.id) ?? -1) - Number(eliminationOrder.get(a.id) ?? -1);
+    });
+    renderSettlementFrame(`
       <div class="bar-settlement-head">
         <span>LIAR DECK</span>
-        <h2>${game.result?.winnerAgentName ? `${escapeHtml(game.result.winnerAgentName)} 获胜` : "骗子酒馆揭牌"}</h2>
-        <p>${escapeHtml(reveal.reason || game.result?.reason || "")}</p>
+        <h2 id="bar-settlement-title">${result.aborted ? "本局已结算" : result.winnerAgentName ? `${escapeHtml(result.winnerAgentName)} 获胜` : "骗子酒馆揭牌"}</h2>
+        <p>${escapeHtml(reveal.reason || result.reason || "本局已结束。")}</p>
       </div>
       <div class="bar-settlement-grid">
         <section>
@@ -788,32 +840,31 @@ function renderSettlement() {
           </ol>
         </section>
         <section>
-          <h3>玩家</h3>
+          <h3>玩家排名</h3>
           <ol class="bar-compact-list">
-            ${players.map((player) => `<li><strong>${escapeHtml(player.agentName)}</strong><span>${escapeHtml(player.status)} · ${Number(player.cardsRemaining || 0)} 张</span></li>`).join("") || "<li><span>暂无玩家</span></li>"}
+            ${rankedPlayers.map((player, index) => `<li><strong>#${index + 1} ${escapeHtml(player.agentName)}</strong><span>${player.id === result.winnerPlayerId ? "最终赢家" : player.status === "eliminated" ? "已淘汰" : "存活"} · ${Number(player.cardsRemaining || 0)} 张</span></li>`).join("") || "<li><span>暂无玩家</span></li>"}
           </ol>
         </section>
       </div>
-    `;
+    `, game);
     return;
   }
-  const winnerText = game.result.winner === "civilians" ? "平民胜" : "卧底胜";
+  const winnerText = result.aborted ? "本局已结算" : result.winner === "civilians" ? "平民胜" : "卧底胜";
   const descriptions = game.descriptions || [];
   const votes = game.votes || [];
-  elements.settlement.hidden = false;
-  elements.settlement.innerHTML = `
+  renderSettlementFrame(`
     <div class="bar-settlement-head">
       <span>ROUND SETTLEMENT</span>
-      <h2>${escapeHtml(winnerText)}</h2>
-      <p>${escapeHtml(game.result.reason || "")}</p>
+      <h2 id="bar-settlement-title">${escapeHtml(winnerText)}</h2>
+      <p>${escapeHtml(result.reason || "本局已结束。")}</p>
     </div>
     <div class="bar-settlement-grid">
       <section>
         <h3>结果</h3>
         <dl class="bar-result-list">
-          <div><dt>卧底</dt><dd>${escapeHtml(game.result.undercoverAgentName || "-")}</dd></div>
-          <div><dt>被投出</dt><dd>${escapeHtml(game.result.eliminatedAgentName || "无明确单人")}</dd></div>
-          <div><dt>主人动作</dt><dd>${game.result.winner === "undercover" ? "平民阵营主人该喝一口" : "卧底主人该喝一口"}</dd></div>
+          <div><dt>卧底</dt><dd>${escapeHtml(result.undercoverAgentName || "-")}</dd></div>
+          <div><dt>被投出</dt><dd>${escapeHtml(result.eliminatedAgentName || "无明确单人")}</dd></div>
+          <div><dt>结算</dt><dd>${result.aborted ? "房主提前结束，不记录胜负" : result.winner === "undercover" ? "卧底阵营获胜" : "平民阵营获胜"}</dd></div>
         </dl>
       </section>
       <section>
@@ -829,7 +880,7 @@ function renderSettlement() {
         </ol>
       </section>
     </div>
-  `;
+  `, game);
 }
 
 function renderDie(value) {
@@ -1017,24 +1068,28 @@ function showTurnCaption(message) {
   renderMessages();
   elements.turnCaptionAgent.textContent = message.agentName || "Agent";
   elements.turnCaptionText.textContent = message.text || "";
+  const isLocalTurn = Boolean(message.playerId && message.playerId === state.session?.player?.id);
+  elements.turnCaption.classList.toggle("is-passive", !isLocalTurn);
   elements.turnCaption.hidden = false;
   elements.turnCaption.classList.remove("is-leaving");
   elements.turnCaption.classList.add("is-visible");
-  if (state.three) {
+  if (state.three && isLocalTurn) {
     state.three.focusPlayer(message.playerId);
-  } else {
+  } else if (!state.three) {
     showBubble(message);
+  } else {
+    state.three.overview?.();
   }
   state.turnCaptionTimer = window.setTimeout(() => {
     elements.turnCaption.classList.add("is-leaving");
     window.setTimeout(() => {
       elements.turnCaption.hidden = true;
-      elements.turnCaption.classList.remove("is-visible", "is-leaving");
+      elements.turnCaption.classList.remove("is-visible", "is-leaving", "is-passive");
     }, 420);
     state.hiddenTurnMessages.delete(message.id);
     renderMessages();
     syncThreeView();
-  }, TURN_CAPTION_TTL_MS);
+  }, isLocalTurn ? TURN_CAPTION_TTL_MS : PASSIVE_TURN_CAPTION_TTL_MS);
 }
 
 function hasPrivateSession() {
@@ -1392,7 +1447,7 @@ function connectRoomEvents() {
   source.onerror = () => {
     elements.connection.textContent = "reconnecting";
   };
-  ["state", "join", "rejoin", "say", "heartbeat", "reset", "leave", "game_started", "agent_action", "game_phase", "game_skip", "decision_started", "decision_timeout_updated", "agent_suggestion", "decision_committed", "decision_expired", "player_profile_updated"].forEach((type) => {
+  ["state", "join", "rejoin", "say", "heartbeat", "reset", "leave", "game_started", "game_ended", "rematch_ready_updated", "agent_action", "game_phase", "game_skip", "decision_started", "decision_timeout_updated", "agent_suggestion", "decision_committed", "decision_expired", "player_profile_updated"].forEach((type) => {
     source.addEventListener(type, (event) => {
       const payload = JSON.parse(event.data);
       if (payload.state) {
@@ -1431,7 +1486,7 @@ function showAgentInvitation(session, nextState, { created = false } = {}) {
   elements.joinPrompt.hidden = false;
   elements.joinSubmit.hidden = true;
   elements.joinTitle.textContent = created ? "酒桌已准备好" : "让 Agent 一起入座";
-  elements.joinHint.textContent = "先复制指令发给 Agent；你的座位已经保留。";
+  elements.joinHint.textContent = "座位已保留。复制专属指令并发送给 Agent，然后进入酒桌等待它上线。";
   elements.joinRoomForm.querySelectorAll("label, input[type='hidden']").forEach((field) => { field.hidden = true; });
   elements.joinModal.hidden = false;
   copyText(session.agentPrompt || "").then(
@@ -1569,6 +1624,45 @@ async function leaveCurrentRoom() {
     window.history.replaceState({}, "", "/bar.html");
     showLobby();
   }
+}
+
+async function setRematchReady(ready) {
+  if (!state.session?.agentToken || !state.roomId) return;
+  const payload = await requestJson(`/api/bar/rooms/${encodeURIComponent(state.roomId)}/player/rematch-ready`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${state.session.agentToken}` },
+    body: JSON.stringify({ ready })
+  });
+  renderState(payload.state || {});
+  setStatus(ready ? "已准备下一局。" : "已取消准备。", "ok");
+}
+
+async function replayEndedGame() {
+  const game = state.game;
+  if (!game || game.phase !== "ended") return;
+  const body = { type: game.type, decisionTimeoutSeconds: Number(game.decisionTimeoutSeconds || 30) };
+  if (game.type === "liar_dice") body.diceCount = Number(game.diceCount || 5);
+  if (game.type === "liar_deck") body.maxPlayers = Math.min(4, Math.max(2, Number(game.playerOrder?.length || 4)));
+  await postHostAction("/game/start", body);
+  closeHostDrawer();
+  setStatus("新一局已开始，原座位保持不变。", "ok");
+}
+
+function openNextGameSetup(type = "") {
+  openHostDrawer();
+  const applySetup = () => {
+    if (type) renderHostStartControls(type);
+    if (type === "undercover") {
+      const civilian = elements.hostStartForm?.elements.civilianWord;
+      const undercover = elements.hostStartForm?.elements.undercoverWord;
+      if (civilian) civilian.value = "";
+      if (undercover) undercover.value = "";
+      civilian?.focus();
+      setHostStatus("请更换平民词和卧底词后开始下一局。", "");
+    } else elements.hostGameType?.focus();
+  };
+  applySetup();
+  window.setTimeout(applySetup, 250);
 }
 
 async function startTestMode() {
@@ -1752,6 +1846,21 @@ elements.copyPromptToolbar.addEventListener("click", copyPrompt);
 elements.leaveRoom.addEventListener("click", () => {
   leaveCurrentRoom();
 });
+elements.settlement?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    if (button.matches("[data-bar-rematch]")) await replayEndedGame();
+    else if (button.matches("[data-bar-rematch-config]")) { openNextGameSetup("undercover"); button.disabled = false; }
+    else if (button.matches("[data-bar-switch-game]")) { openNextGameSetup(); button.disabled = false; }
+    else if (button.matches("[data-bar-rematch-ready]")) await setRematchReady(button.getAttribute("aria-pressed") !== "true");
+    else if (button.matches("[data-bar-settlement-leave]")) await leaveCurrentRoom();
+  } catch (error) {
+    setStatus(error.message, "error");
+    button.disabled = false;
+  }
+});
 elements.testMode?.addEventListener("click", startTestMode);
 elements.assistModeToggle?.addEventListener("click", toggleAssistMode);
 elements.hostToggle?.addEventListener("click", openHostDrawer);
@@ -1788,7 +1897,7 @@ elements.hostSkipTurn?.addEventListener("click", async () => {
   try { await postHostAction("/game/skip"); } catch (error) { setHostStatus(error.message, "error"); }
 });
 elements.hostResetGame?.addEventListener("click", async () => {
-  try { await postHostAction("/reset", { clearPlayers: false }); } catch (error) { setHostStatus(error.message, "error"); }
+  try { await postHostAction("/game/end"); } catch (error) { setHostStatus(error.message, "error"); }
 });
 elements.hostClearRoom?.addEventListener("click", async () => {
   try { await postHostAction("/reset", { clearPlayers: true }); } catch (error) { setHostStatus(error.message, "error"); }
