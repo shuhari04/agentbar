@@ -1,8 +1,16 @@
 const BAR_SESSION_PREFIX = "agentbarRoomSession:";
 const BUBBLE_TTL_MS = 12000;
 const TURN_CAPTION_TTL_MS = 5200;
+const BAR_LOCALE_KEY = "agentbarLocale";
+const BAR_EN = {
+  "登录 AgentBar":"Sign in to AgentBar","更换头像":"Change avatar","退出账号":"Sign out","创建酒局":"Create table","输入房间码":"Enter room code","正在进行":"Live tables","刷新":"Refresh","第一张桌还没开":"No table is open yet","房间码":"Room code","复制房间码":"Copy room code",
+  "主持":"Host","测试局":"Test game","沉浸模式":"Immersive","显示 HUD":"Show HUD","动态":"Feed","等待开局":"Waiting to start","轮到你选择":"Your choice","自动选择":"Auto select","半自动":"Assisted","全自动":"Autopilot","出牌":"Play cards","质疑":"Challenge","出牌时说":"Say with your play","酒桌动态":"Table feed","连接 Agent":"Connect Agent","主持控制":"Host controls","关闭":"Close","复制":"Copy","复制指令":"Copy instructions","发送":"Send","游戏":"Game","房间名":"Room name","Agent 名":"Agent name","公开":"Public","私密":"Private","开始游戏":"Start game","下一局游戏":"Next game","结束当前游戏":"End current game"
+};
+const BAR_ORIGINAL_TEXT = new WeakMap();
+function getLocale() { try { const value = localStorage.getItem(BAR_LOCALE_KEY); if (value === "en" || value === "zh-Hans") return value; } catch {} return /^zh(?:-|$)/i.test(navigator.language || "") ? "zh-Hans" : "en"; }
 
 const state = {
+  locale: getLocale(),
   roomId: "",
   players: [],
   messages: [],
@@ -42,6 +50,7 @@ const elements = {
   accountAvatar: document.querySelector("[data-bar-account-avatar]"),
   accountMenuToggle: document.querySelector("[data-bar-account-menu-toggle]"),
   accountMenu: document.querySelector("[data-bar-account-menu]"),
+  localeButtons: document.querySelectorAll("[data-bar-locale]"),
   login: document.querySelector("[data-bar-login]"),
   avatarEdit: document.querySelector("[data-bar-avatar-edit]"),
   logout: document.querySelector("[data-bar-logout]"),
@@ -191,6 +200,26 @@ function clearCurrentSession() {
   elements.decisionPanel.hidden = true;
   elements.sayForm.hidden = true;
 }
+
+function applyLocale() {
+  document.documentElement.lang = state.locale;
+  document.title = state.locale === "en" ? "AgentBar" : "AgentBar 酒馆";
+  document.querySelector('meta[name="description"]')?.setAttribute("content", state.locale === "en" ? "Seat your Agent for a game at the table." : "让你的 Agent 入座，一起开一局。");
+  elements.localeButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.barLocale === state.locale)));
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const source = BAR_ORIGINAL_TEXT.get(node) || node.nodeValue;
+    BAR_ORIGINAL_TEXT.set(node, source);
+    const key = source.trim(); const translated = BAR_EN[key];
+    if (translated) node.nodeValue = state.locale === "en" ? source.replace(key, translated) : source;
+  }
+  renderAccount(); renderRooms(state.rooms);
+  if (state.game) renderState({ room: state.session?.room, players: state.players, messages: state.messages, game: state.game });
+  if (state.privateView) { renderPrivateHand(); renderPrivateDice(); renderDecisionPanel(); }
+}
+
+function setLocale(locale) { if (locale !== "en" && locale !== "zh-Hans") return; state.locale = locale; try { localStorage.setItem(BAR_LOCALE_KEY, locale); } catch {} applyLocale(); }
 
 function setStatus(message, tone = "") {
   elements.status.textContent = message || "";
@@ -1698,6 +1727,7 @@ elements.accountMenuToggle?.addEventListener("click", (event) => {
   toggleAccountMenu();
 });
 elements.accountMenu?.addEventListener("click", (event) => event.stopPropagation());
+elements.localeButtons.forEach((button) => button.addEventListener("click", () => setLocale(button.dataset.barLocale)));
 elements.login?.addEventListener("click", () => loginGuest().catch((error) => setStatus(error.message, "error")));
 elements.avatarEdit?.addEventListener("click", openAvatarEditor);
 elements.logout?.addEventListener("click", signOutAccount);
@@ -1789,5 +1819,6 @@ async function copyPrompt() {
 
 loadAccount().finally(() => {
   if (!restoreFromUrl()) showLobby();
+  applyLocale();
 });
 window.setInterval(heartbeat, 60000);
